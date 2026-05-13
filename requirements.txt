@@ -2,3 +2,5 @@ experta==1.9.4
 streamlit>=1.33.0
 ipywidgets>=8.0.0
 jupyter>=1.0.0
+pandas
+altair
