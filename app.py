@@ -5,6 +5,7 @@ for name in ["Mapping", "MutableMapping", "Sequence", "Callable", "Hashable"]:
     if not hasattr(collections, name):
         setattr(collections, name, getattr(collections.abc, name))
 
+import pandas as pd
 import streamlit as st
 from experta import Fact, KnowledgeEngine, Rule, MATCH, P
 
@@ -228,6 +229,140 @@ def analyze_cybersecurity_risk(issue_confidences, failed_login_attempts=0, faile
     return engine.get_report()
 
 
+def get_risk_status(level):
+    if level == "Low Risk":
+        return "success", "Low risk: no critical rule fired, but basic security hygiene should continue."
+    if level == "Medium Risk":
+        return "warning", "Medium risk: some issues require attention and improvement."
+    if level == "High Risk":
+        return "error", "High risk: important security controls should be improved immediately."
+    return "error", "Critical risk: immediate incident response is recommended."
+
+
+def show_status_message(level):
+    status_type, message = get_risk_status(level)
+    if status_type == "success":
+        st.success(message)
+    elif status_type == "warning":
+        st.warning(message)
+    else:
+        st.error(message)
+
+
+def create_risk_dataframe(risks):
+    if not risks:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(risks)
+    df["confidence_percent"] = (df["confidence"] * 100).round(1)
+    return df
+
+
+def show_metric_cards(report):
+    detected_count = len(report["detected_risks"])
+    highest_severity = "None"
+
+    if detected_count > 0:
+        severity_order = {"Low": 1, "Medium": 2, "High": 3, "Critical": 4}
+        highest_severity = max(
+            [risk["severity"] for risk in report["detected_risks"]],
+            key=lambda severity: severity_order.get(severity, 0),
+        )
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric("Overall Risk Level", report["overall_level"])
+
+    with col2:
+        st.metric("Risk Score", f"{report['overall_score']} / 100")
+
+    with col3:
+        st.metric("Detected Risks", detected_count)
+
+    with col4:
+        st.metric("Highest Severity", highest_severity)
+
+
+def show_risk_score_progress(report):
+    score = float(report["overall_score"])
+    st.subheader("Risk Score Progress")
+    st.progress(int(score))
+    st.caption("The score summarizes the final cybersecurity risk level from 0 to 100.")
+
+
+def show_severity_distribution_chart(risks_df):
+    st.subheader("Severity Distribution Chart")
+
+    if risks_df.empty:
+        st.info("No detected risks are available for severity distribution.")
+        return
+
+    severity_counts = risks_df["severity"].value_counts().reindex(
+        ["Low", "Medium", "High", "Critical"],
+        fill_value=0,
+    )
+
+    st.bar_chart(severity_counts)
+
+
+def show_confidence_score_chart(risks_df):
+    st.subheader("Confidence Score Chart")
+
+    if risks_df.empty:
+        st.info("No detected risks are available for confidence visualization.")
+        return
+
+    confidence_chart = risks_df[["risk", "confidence_percent"]].set_index("risk")
+    st.bar_chart(confidence_chart)
+    st.caption("Confidence values are calculated using the Certainty Factor equation.")
+
+
+def show_risk_details_expanders(risks):
+    st.subheader("Risk Details and Recommendations")
+
+    if not risks:
+        st.info("No major risk was detected based on the selected indicators.")
+        return
+
+    for risk in risks:
+        title = f"{risk['risk']} | {risk['severity']} | Confidence: {risk['confidence'] * 100:.1f}%"
+
+        with st.expander(title, expanded=False):
+            st.write(f"**Rule Fired:** {risk['rule']}")
+            st.write(f"**Severity:** {risk['severity']}")
+            st.write(f"**Confidence:** {risk['confidence'] * 100:.1f}%")
+            st.write(f"**Conditions:** {', '.join(risk['conditions'])}")
+            st.write(f"**Why this risk was detected:** {risk['reason']}")
+            st.write(f"**Recommended Actions:** {risk['advice']}")
+
+
+def show_explanation_trace_timeline(trace):
+    st.subheader("Explanation Trace Timeline")
+
+    if not trace:
+        st.info("No explanation trace is available.")
+        return
+
+    for index, step in enumerate(trace, start=1):
+        with st.container():
+            st.markdown(
+                f"""
+                <div style="
+                    padding: 12px 16px;
+                    margin-bottom: 10px;
+                    border-left: 5px solid #2563eb;
+                    border-radius: 10px;
+                    background-color: rgba(37, 99, 235, 0.08);
+                ">
+                    <b>Step {index}</b><br>
+                    {step}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
 st.set_page_config(page_title="Cybersecurity Risk Advisor", page_icon="🛡️", layout="wide")
 
 st.title("🛡️ Cybersecurity Risk Advisor Expert System")
@@ -240,6 +375,7 @@ st.sidebar.header("Security Indicators")
 st.sidebar.write("Select the issues that apply, then set the confidence value for each selected issue.")
 
 selected_issues = {}
+
 for issue_name, label in ISSUE_LABELS.items():
     checked = st.sidebar.checkbox(label, value=False, key=f"check_{issue_name}")
     if checked:
@@ -261,6 +397,7 @@ failed_login_attempts = st.sidebar.number_input(
 )
 
 failed_login_cf = 0.80
+
 if failed_login_attempts >= 5:
     failed_login_cf = st.sidebar.slider(
         "Failed Login Attempts confidence",
@@ -274,34 +411,39 @@ analyze_button = st.sidebar.button("Analyze Cybersecurity Risk", type="primary")
 
 if analyze_button:
     report = analyze_cybersecurity_risk(selected_issues, failed_login_attempts, failed_login_cf)
+    risks_df = create_risk_dataframe(report["detected_risks"])
 
-    col1, col2 = st.columns(2)
-    col1.metric("Overall Risk Level", report["overall_level"])
-    col2.metric("Risk Score", f"{report['overall_score']} / 100")
+    show_metric_cards(report)
+    show_status_message(report["overall_level"])
+    show_risk_score_progress(report)
 
-    if report["overall_level"] == "Low Risk":
-        st.success("Low risk: no critical rule fired, but basic security hygiene should continue.")
-    elif report["overall_level"] == "Medium Risk":
-        st.warning("Medium risk: some issues require attention and improvement.")
-    elif report["overall_level"] == "High Risk":
-        st.error("High risk: important security controls should be improved immediately.")
-    else:
-        st.error("Critical risk: immediate incident response is recommended.")
+    tab1, tab2, tab3 = st.tabs(
+        ["📊 Visualizations", "🧾 Detected Risks", "🧠 Explanation Trace"]
+    )
 
-    st.subheader("Detected Risks")
-    if not report["detected_risks"]:
-        st.info("No major risk was detected based on the selected indicators.")
-    else:
-        for risk in report["detected_risks"]:
-            with st.expander(f"{risk['risk']} — {risk['severity']} — Confidence {risk['confidence']}"):
-                st.write(f"**Rule:** {risk['rule']}")
-                st.write(f"**Conditions:** {', '.join(risk['conditions'])}")
-                st.write(f"**Reason:** {risk['reason']}")
-                st.write(f"**Recommended Actions:** {risk['advice']}")
+    with tab1:
+        col1, col2 = st.columns(2)
 
-    st.subheader("Explanation Trace")
-    for step in report["explanation_trace"]:
-        st.write(f"- {step}")
+        with col1:
+            show_severity_distribution_chart(risks_df)
+
+        with col2:
+            show_confidence_score_chart(risks_df)
+
+        if not risks_df.empty:
+            st.subheader("Detected Risks Summary Table")
+            st.dataframe(
+                risks_df[["risk", "severity", "confidence_percent", "rule"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with tab2:
+        show_risk_details_expanders(report["detected_risks"])
+
+    with tab3:
+        show_explanation_trace_timeline(report["explanation_trace"])
+
 else:
     st.info("Use the sidebar to select security indicators, then click Analyze Cybersecurity Risk.")
     st.markdown(
