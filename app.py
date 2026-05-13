@@ -387,128 +387,269 @@ BORDER    = "#30363d"
 TEXT_MAIN = "#e6edf3"
 TEXT_SUB  = "#8b949e"
 
-def _plotly_layout(title="", height=300):
+def _base_layout(height=300, margin=None):
+    m = margin or dict(l=32, r=32, t=48, b=32)
     return dict(
-        title=dict(text=title, font=dict(color=TEXT_MAIN, size=14, family="IBM Plex Mono"), x=0.5),
         paper_bgcolor=DARK_BG,
-        plot_bgcolor=CARD_BG,
-        font=dict(color=TEXT_SUB, family="IBM Plex Sans"),
-        margin=dict(l=24, r=24, t=40, b=24),
+        plot_bgcolor=DARK_BG,
+        font=dict(color=TEXT_SUB, family="IBM Plex Sans", size=12),
+        margin=m,
         height=height,
     )
 
 
 def gauge_chart(score, level, level_color):
-    fig = go.Figure(go.Indicator(
+    """Semi-circle gauge — number floats below the arc, no overlap."""
+    fig = go.Figure()
+
+    # Arc zones (background color bands)
+    zone_colors = ["#1c2e1c", "#272314", "#2a1e10", "#2a1010"]
+    zone_ranges = [(0, 25), (25, 50), (50, 75), (75, 100)]
+    for (lo, hi), zc in zip(zone_ranges, zone_colors):
+        fig.add_trace(go.Indicator(
+            mode="gauge",
+            value=lo,
+            gauge={
+                "axis": {"range": [0, 100], "visible": False},
+                "bar": {"color": "rgba(0,0,0,0)", "thickness": 0},
+                "bgcolor": "rgba(0,0,0,0)",
+                "borderwidth": 0,
+                "steps": [{"range": [lo, hi], "color": zc}],
+            },
+            domain={"x": [0, 1], "y": [0, 1]},
+        ))
+
+    # Main indicator — number positioned below arc
+    fig.add_trace(go.Indicator(
         mode="gauge+number",
         value=score,
-        number={"suffix": "/100", "font": {"color": level_color, "size": 36, "family": "IBM Plex Mono"}},
-        gauge={
-            "axis": {"range": [0, 100], "tickcolor": TEXT_SUB, "tickfont": {"color": TEXT_SUB}},
-            "bar": {"color": level_color, "thickness": 0.25},
-            "bgcolor": CARD_BG,
-            "bordercolor": BORDER,
-            "steps": [
-                {"range": [0,  25], "color": "#1a2e1a"},
-                {"range": [25, 50], "color": "#2a2515"},
-                {"range": [50, 75], "color": "#2a1e10"},
-                {"range": [75, 100], "color": "#2a1010"},
-            ],
-            "threshold": {"line": {"color": level_color, "width": 3}, "value": score},
+        number={
+            "font": {"color": level_color, "size": 44, "family": "IBM Plex Mono"},
+            "suffix": "",
+            "valueformat": "d",
         },
+        gauge={
+            "axis": {
+                "range": [0, 100],
+                "tickvals": [0, 25, 50, 75, 100],
+                "ticktext": ["0", "25", "50", "75", "100"],
+                "tickcolor": BORDER,
+                "tickfont": {"color": TEXT_SUB, "size": 10},
+                "tickwidth": 1,
+            },
+            "bar": {"color": level_color, "thickness": 0.18},
+            "bgcolor": "rgba(0,0,0,0)",
+            "borderwidth": 0,
+            "steps": [],
+            "threshold": {
+                "line": {"color": level_color, "width": 2},
+                "thickness": 0.7,
+                "value": score,
+            },
+        },
+        domain={"x": [0, 1], "y": [0.1, 1]},
     ))
+
+    # Level label below number, /100 tucked to the right of the score
+    fig.add_annotation(
+        text=level,
+        x=0.5, y=0.04,
+        xref="paper", yref="paper",
+        showarrow=False,
+        font=dict(color=level_color, size=12, family="IBM Plex Mono"),
+    )
+    fig.add_annotation(
+        text="/ 100",
+        x=0.73, y=0.22,
+        xref="paper", yref="paper",
+        showarrow=False,
+        font=dict(color=TEXT_SUB, size=11, family="IBM Plex Mono"),
+    )
+
     fig.update_layout(
-        **_plotly_layout(f"Overall Risk Score — {level}", height=280),
+        **_base_layout(height=260, margin=dict(l=20, r=20, t=36, b=16)),
+        title=dict(
+            text="Risk Score",
+            font=dict(color=TEXT_MAIN, size=13, family="IBM Plex Mono"),
+            x=0.5, y=0.97,
+        ),
     )
     return fig
 
 
 def risks_bar_chart(risks):
+    """Horizontal bar per risk — label above bar, value outside to the right."""
     if not risks:
         return None
-    names   = [r["risk"].replace(" Risk", "").replace(" and ", " & ") for r in risks]
-    cfs     = [int(r["confidence"] * 100) for r in risks]
-    colors  = [SEVERITY_COLORS.get(r["severity"], TEXT_SUB) for r in risks]
-    severities = [r["severity"] for r in risks]
+
+    # Sort by confidence descending
+    risks_sorted = sorted(risks, key=lambda r: r["confidence"])
+    names   = [r["risk"].replace(" Risk", "").replace(" and Data Loss", "") for r in risks_sorted]
+    cfs     = [round(r["confidence"] * 100) for r in risks_sorted]
+    colors  = [SEVERITY_COLORS.get(r["severity"], TEXT_SUB) for r in risks_sorted]
+    sevs    = [r["severity"] for r in risks_sorted]
+
+    bar_height = 36
+    chart_h = max(240, bar_height * len(risks_sorted) + 100)
 
     fig = go.Figure()
-    for i, (name, cf_val, color, sev) in enumerate(zip(names, cfs, colors, severities)):
-        fig.add_trace(go.Bar(
-            x=[cf_val],
-            y=[name],
-            orientation="h",
-            marker=dict(color=color, opacity=0.85, line=dict(color=color, width=1)),
-            text=f"{cf_val}% · {sev}",
-            textposition="inside",
-            textfont=dict(color="#fff", size=11, family="IBM Plex Mono"),
-            name=sev,
-            showlegend=False,
-            hovertemplate=f"<b>{name}</b><br>Confidence: {cf_val}%<br>Severity: {sev}<extra></extra>",
-        ))
+    # Background track bars
+    fig.add_trace(go.Bar(
+        x=[100] * len(names),
+        y=names,
+        orientation="h",
+        marker=dict(color="rgba(48,54,61,0.4)", line_width=0),
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+    # Actual value bars
+    fig.add_trace(go.Bar(
+        x=cfs,
+        y=names,
+        orientation="h",
+        marker=dict(
+            color=colors,
+            opacity=0.90,
+            line_width=0,
+        ),
+        text=[f"{v}%" for v in cfs],
+        textposition="outside",
+        textfont=dict(color=TEXT_MAIN, size=12, family="IBM Plex Mono"),
+        customdata=sevs,
+        hovertemplate="<b>%{y}</b><br>Confidence: %{x}%<br>Severity: %{customdata}<extra></extra>",
+        showlegend=False,
+        cliponaxis=False,
+    ))
 
     fig.update_layout(
-        **_plotly_layout("Detected Risks — Confidence %", height=max(200, 60 * len(risks) + 60)),
-        xaxis=dict(range=[0, 100], ticksuffix="%", gridcolor=BORDER, zerolinecolor=BORDER),
-        yaxis=dict(autorange="reversed", gridcolor="rgba(0,0,0,0)"),
-        bargap=0.3,
+        **_base_layout(height=chart_h, margin=dict(l=16, r=56, t=48, b=16)),
+        title=dict(
+            text="Detected Risks — Confidence",
+            font=dict(color=TEXT_MAIN, size=13, family="IBM Plex Mono"),
+            x=0.5, y=0.98,
+        ),
+        barmode="overlay",
+        xaxis=dict(
+            range=[0, 115],
+            visible=False,
+        ),
+        yaxis=dict(
+            autorange=True,
+            tickfont=dict(color=TEXT_MAIN, size=11, family="IBM Plex Sans"),
+            gridcolor="rgba(0,0,0,0)",
+        ),
+        bargap=0.40,
     )
     return fig
 
 
 def severity_pie_chart(risks):
+    """Donut chart — labels outside with leader lines, no inside text crowding."""
     if not risks:
         return None
     from collections import Counter
+    order = ["Critical", "High", "Medium", "Low"]
     counts = Counter(r["severity"] for r in risks)
-    labels = list(counts.keys())
-    values = list(counts.values())
-    colors = [SEVERITY_COLORS.get(l, TEXT_SUB) for l in labels]
+    labels = [s for s in order if s in counts]
+    values = [counts[s] for s in labels]
+    colors = [SEVERITY_COLORS[s] for s in labels]
 
     fig = go.Figure(go.Pie(
         labels=labels,
         values=values,
-        marker=dict(colors=colors, line=dict(color=DARK_BG, width=2)),
-        textfont=dict(family="IBM Plex Mono", size=12),
-        hole=0.5,
-        hovertemplate="<b>%{label}</b>: %{value} rule(s)<extra></extra>",
+        marker=dict(colors=colors, line=dict(color=DARK_BG, width=3)),
+        hole=0.60,
+        textinfo="none",           # hide all inside text
+        hovertemplate="<b>%{label}</b><br>%{value} rule(s) · %{percent}<extra></extra>",
+        direction="clockwise",
+        sort=False,
     ))
-    fig.update_layout(**_plotly_layout("Severity Distribution", height=280))
+
+    # Custom legend-style annotations outside
+    fig.update_traces(
+        textposition="outside",
+        texttemplate="%{label}<br><b>%{percent:.0%}</b>",
+        textfont=dict(size=11, family="IBM Plex Mono", color=TEXT_MAIN),
+        outsidetextfont=dict(size=10, family="IBM Plex Mono"),
+        automargin=True,
+    )
+
+    fig.update_layout(
+        **_base_layout(height=280, margin=dict(l=16, r=16, t=48, b=16)),
+        title=dict(
+            text="Severity Mix",
+            font=dict(color=TEXT_MAIN, size=13, family="IBM Plex Mono"),
+            x=0.5, y=0.98,
+        ),
+        showlegend=False,
+    )
     return fig
 
 
 def category_radar_chart(active_issues):
-    """Show how many issues exist per ISSUE_CATEGORIES category."""
+    """Radar showing % of issues activated per security category."""
     if not active_issues:
         return None
-    cats  = list(ISSUE_CATEGORIES.keys())
+
+    # Clean short labels
+    short_labels = {
+        "🔐 Account & Identity": "Account &\nIdentity",
+        "🖥️ System & Malware": "System &\nMalware",
+        "📧 Email & Phishing": "Email &\nPhishing",
+        "🌐 Network & Remote Access": "Network &\nRemote",
+        "💾 Data Protection": "Data\nProtection",
+    }
+    cats = list(ISSUE_CATEGORIES.keys())
+    display = [short_labels.get(c, c) for c in cats]
     scores = []
     for issues_list in ISSUE_CATEGORIES.values():
         activated = [iss for iss in issues_list if iss in active_issues]
-        total = len(issues_list)
-        pct = int(round(len(activated) / total * 100)) if total else 0
+        pct = round(len(activated) / len(issues_list) * 100) if issues_list else 0
         scores.append(pct)
 
-    # close the loop
-    cats_loop   = cats + [cats[0]]
-    scores_loop = scores + [scores[0]]
+    # Close the loop
+    display_loop = display + [display[0]]
+    scores_loop  = scores  + [scores[0]]
 
-    fig = go.Figure(go.Scatterpolar(
+    fig = go.Figure()
+    # Filled area
+    fig.add_trace(go.Scatterpolar(
         r=scores_loop,
-        theta=cats_loop,
+        theta=display_loop,
         fill="toself",
-        fillcolor="rgba(248,81,73,0.15)",
+        fillcolor="rgba(248,81,73,0.12)",
         line=dict(color="#f85149", width=2),
+        mode="lines+markers",
+        marker=dict(size=6, color="#f85149", symbol="circle"),
         hovertemplate="%{theta}: %{r}%<extra></extra>",
+        showlegend=False,
     ))
+
     fig.update_layout(
-        **_plotly_layout("Risk Coverage by Category", height=320),
+        **_base_layout(height=340, margin=dict(l=60, r=60, t=60, b=60)),
+        title=dict(
+            text="Risk Coverage by Category",
+            font=dict(color=TEXT_MAIN, size=13, family="IBM Plex Mono"),
+            x=0.5, y=0.98,
+        ),
         polar=dict(
             bgcolor=CARD_BG,
             radialaxis=dict(
-                visible=True, range=[0, 100], ticksuffix="%",
-                gridcolor=BORDER, tickfont=dict(color=TEXT_SUB, size=10),
+                visible=True,
+                range=[0, 100],
+                tickvals=[25, 50, 75, 100],
+                ticktext=["25%", "50%", "75%", "100%"],
+                gridcolor=BORDER,
+                linecolor=BORDER,
+                tickfont=dict(color=TEXT_SUB, size=9, family="IBM Plex Mono"),
+                tickangle=0,
             ),
-            angularaxis=dict(gridcolor=BORDER, tickfont=dict(color=TEXT_MAIN, size=11)),
+            angularaxis=dict(
+                gridcolor=BORDER,
+                linecolor=BORDER,
+                tickfont=dict(color=TEXT_MAIN, size=11, family="IBM Plex Sans"),
+                direction="clockwise",
+            ),
         ),
     )
     return fig
@@ -657,31 +798,32 @@ if analyze:
     st.markdown("<br>", unsafe_allow_html=True)
     st.progress(score / 100)
 
-    # ── Charts row ──────────────────────────────────────────────────────────
+    # ── Charts ──────────────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
-    ch1, ch2, ch3 = st.columns([1, 1.4, 1])
 
+    # Row 1: Gauge (left) + Pie (right)
+    ch1, ch2 = st.columns([1, 1])
     with ch1:
         gauge = gauge_chart(score, level, level_color)
         st.plotly_chart(gauge, use_container_width=True, config={"displayModeBar": False})
-
     with ch2:
-        bar = risks_bar_chart(risks)
-        if bar:
-            st.plotly_chart(bar, use_container_width=True, config={"displayModeBar": False})
-        else:
-            st.markdown(
-                "<div style='height:280px;display:flex;align-items:center;justify-content:center;"
-                "color:#3fb950;font-family:IBM Plex Mono;font-size:13px;'>&#10003; No risks detected</div>",
-                unsafe_allow_html=True,
-            )
-
-    with ch3:
         pie = severity_pie_chart(risks)
         if pie:
             st.plotly_chart(pie, use_container_width=True, config={"displayModeBar": False})
 
-    # radar always full-width if we have active inputs
+    # Row 2: Bar chart full-width
+    bar = risks_bar_chart(risks)
+    if bar:
+        st.plotly_chart(bar, use_container_width=True, config={"displayModeBar": False})
+    elif not risks:
+        st.markdown(
+            "<div style='padding:24px;text-align:center;color:#3fb950;"
+            "font-family:IBM Plex Mono;font-size:13px;border:1px solid #30363d;"
+            "border-radius:10px;background:#161b22;'>&#10003; No risks detected</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Row 3: Radar full-width
     radar = category_radar_chart(active_issues)
     if radar:
         st.plotly_chart(radar, use_container_width=True, config={"displayModeBar": False})
